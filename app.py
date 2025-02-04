@@ -3,16 +3,10 @@ import google.generativeai as genai
 import sqlite3
 import uuid
 import pdfplumber
+import time
+from pdf_to_bq import *
 
-PDF_PATH = "./base.pdf"
-
-# Função para extrair texto de um arquivo PDF
-def extract_text_from_pdf(pdf_path):
-    text = ""
-    with pdfplumber.open(pdf_path) as pdf:
-        for page in pdf.pages:
-            text += page.extract_text()
-    return text
+db = PDFDatabase("pdfs.db")
 
 # Função para conectar ao banco de dados SQLite
 def get_db_connection():
@@ -61,7 +55,7 @@ def load_conversation(user_id):
 def generate_gemini_response(prompt, context, api_key):
     try:
         genai.configure(api_key=api_key)  # Configura a API Key
-        model = genai.GenerativeModel('gemini-pro')  # Usando o modelo Gemini Pro
+        model = genai.GenerativeModel('gemini-1.5-flash')  # Usando o modelo Gemini Pro
 
         # Combina o contexto (texto do PDF) com a pergunta do usuário
         full_prompt = f"Com base no seguinte contexto, responda à pergunta:\n\nContexto:\n{context}\n\nPergunta:\n{prompt}"
@@ -69,16 +63,31 @@ def generate_gemini_response(prompt, context, api_key):
         return response.text
     except Exception as e:
         return f"Erro ao gerar resposta: {str(e)}"
+    
+# Busca com frase completa
+def get_contexto(search):
+    try:
+        resultados = db.search(search)
+        
+        # Mostrar resultados
+        resultado_final = []
+        for resultado in resultados:
+            # print(f"Arquivo: {resultado['file_name']}")
+            # print(f"Página: {resultado['page_number']}")
+            if resultado['content'] not in resultado_final:
+                resultado_final.append(resultado['content'])
+            # print(f"Correspondências: {resultado['keyword_matches']}")
+        
+        return resultado_final
+
+    except Exception as e:
+        print(f"Erro na busca: {e}")
 
 # Interface do Streamlit
 st.title("Chatbot Integrado com Gemini")
 
 # Campo para o usuário inserir a API Key
 api_key = st.text_input("Insira sua API Key do Gemini:", type="password")
-
-# Extrai o texto do PDF (no backend)
-pdf_text = extract_text_from_pdf(PDF_PATH)
-st.success(f"PDF '{PDF_PATH}' carregado com sucesso no backend!")
 
 # Criar a tabela de conversas (se não existir)
 create_conversations_table()
@@ -92,25 +101,26 @@ conversation_history = load_conversation(st.session_state.user_id)
 
 # Exibir o histórico de conversas
 for message in conversation_history:
-    st.write(f"{message['role']}: {message['message']}")
+    with st.chat_message(message["role"]):
+        st.write(message["message"])
 
 # Entrada do usuário
-user_input = st.text_input("Você: ", "")
+user_input = st.chat_input("faça sua pergunta")
 
 # Botão para enviar a mensagem
-if st.button("Enviar"):
-    if user_input:
-        if not api_key:
-            st.error("Por favor, insira uma API Key válida.")
-        else:
-            # Salvar a mensagem do usuário no banco de dados
-            save_message(st.session_state.user_id, "Cliente", user_input)
+if user_input:
+    if not api_key:
+        st.error("Por favor, insira uma API Key válida.")
+    else:
+        # Salvar a mensagem do usuário no banco de dados
+        save_message(st.session_state.user_id, "Cliente", user_input)
 
-            # Gerar uma resposta usando o Gemini
-            response = generate_gemini_response(user_input, pdf_text, api_key)
+        context = get_contexto(user_input)
 
-            # Salvar a resposta do chatbot no banco de dados
-            save_message(st.session_state.user_id, "PoppiBot", response)
+        response = generate_gemini_response(user_input, context, api_key)
 
-            # Recarregar a página para exibir o histórico atualizado
-            st.rerun()
+        # Salvar a resposta do chatbot no banco de dados
+        save_message(st.session_state.user_id, "PoppiBot", response)
+
+        # Recarregar a página para exibir o histórico atualizado
+        st.rerun()
